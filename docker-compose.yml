@@ -1,0 +1,175 @@
+# =============================================================================
+# Home Lab — Docker Compose Stack
+# =============================================================================
+# Services: Traefik · WireGuard Easy · Vaultwarden · Home Assistant · Portainer
+#
+# Before starting:
+#   1. Copy .env.example to .env and fill in all required values
+#   2. Generate TLS certificates with mkcert (see README.md)
+#   3. Populate traefik/config/dynamic.yml with your hashed dashboard password
+#   4. Create host directories (see README.md — "File Structure" section)
+# =============================================================================
+
+name: homelab
+
+networks:
+  # Shared network for Traefik to reach all proxied containers.
+  # A fixed subnet makes it easy to whitelist in Home Assistant trusted_proxies.
+  proxy:
+    name: proxy
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Traefik — Reverse Proxy & TLS Termination
+  # ---------------------------------------------------------------------------
+  traefik:
+    image: traefik:v3
+    container_name: traefik
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      # Bind to all interfaces so LAN devices can reach the services.
+      - "80:80"    # HTTP — redirected to HTTPS by Traefik entrypoint rule
+      - "443:443"  # HTTPS — all web traffic enters here
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro  # Docker provider (read-only)
+      - /home/tom/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - /home/tom/traefik/config:/etc/traefik/config:ro
+      - /home/tom/traefik/certs:/etc/traefik/certs:ro
+      - /home/tom/traefik/logs:/logs
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      # Dashboard is served at https://traefik.lan
+      # Basic-auth credentials are defined in traefik/config/dynamic.yml
+      - "traefik.http.routers.traefik-dashboard.rule=Host(`traefik.lan`)"
+      - "traefik.http.routers.traefik-dashboard.entrypoints=websecure"
+      - "traefik.http.routers.traefik-dashboard.tls=true"
+      - "traefik.http.routers.traefik-dashboard.service=api@internal"
+      - "traefik.http.routers.traefik-dashboard.middlewares=dashboard-auth@file"
+
+  # ---------------------------------------------------------------------------
+  # WireGuard Easy — VPN Server + Web Management UI
+  # ---------------------------------------------------------------------------
+  wg-easy:
+    image: ghcr.io/wg-easy/wg-easy:latest
+    container_name: wg-easy
+    restart: unless-stopped
+    environment:
+      - LANG=en
+      # Public IP or hostname clients use to reach this server over the internet.
+      - WG_HOST=${WG_HOST}
+      # bcrypt hash — generate with: docker run --rm ghcr.io/wg-easy/wg-easy wgpw YOUR_PASS
+      - PASSWORD_HASH=${WG_PASSWORD_HASH}
+      - PORT=51821        # Web UI port (not exposed on host — routed via Traefik)
+      - WG_PORT=51820     # WireGuard VPN UDP port (exposed on host below)
+      - WG_DEFAULT_DNS=1.1.1.1,9.9.9.9
+      - WG_MTU=1420
+    volumes:
+      - /home/tom/wg-easy:/etc/wireguard
+    ports:
+      # The VPN port MUST be exposed directly — Traefik cannot proxy UDP traffic.
+      # Forward UDP 51820 on your router to this NUC's LAN IP for external access.
+      - "51820:51820/udp"
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv4.conf.all.src_valid_mark=1
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.wg-easy.rule=Host(`wg.lan`)"
+      - "traefik.http.routers.wg-easy.entrypoints=websecure"
+      - "traefik.http.routers.wg-easy.tls=true"
+      - "traefik.http.services.wg-easy.loadbalancer.server.port=51821"
+
+  # ---------------------------------------------------------------------------
+  # Vaultwarden — Self-Hosted Bitwarden-Compatible Password Manager
+  # ---------------------------------------------------------------------------
+  vaultwarden:
+    image: vaultwarden/server:latest
+    container_name: vaultwarden
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      # Must match the public URL; required for browser extension to work
+      - DOMAIN=https://pass.lan
+      # Disable public sign-ups after you have created your account
+      - SIGNUPS_ALLOWED=false
+      # Admin panel token — generate with: openssl rand -base64 48
+      - ADMIN_TOKEN=${VAULTWARDEN_ADMIN_TOKEN}
+      - LOG_LEVEL=warn
+    volumes:
+      - /home/tom/vaultwarden:/data
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.vaultwarden.rule=Host(`pass.lan`)"
+      - "traefik.http.routers.vaultwarden.entrypoints=websecure"
+      - "traefik.http.routers.vaultwarden.tls=true"
+      - "traefik.http.services.vaultwarden.loadbalancer.server.port=80"
+
+  # ---------------------------------------------------------------------------
+  # Home Assistant — Home Automation Platform
+  # ---------------------------------------------------------------------------
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    container_name: homeassistant
+    restart: unless-stopped
+    environment:
+      - TZ=${TIMEZONE:-Europe/Brussels}
+    volumes:
+      - /home/tom/homeassistant:/config
+      - /run/dbus:/run/dbus:ro   # Required for Bluetooth integrations
+    # Uncomment ONLY if you need direct USB device access (e.g., Zigbee/Z-Wave sticks).
+    # Prefer the 'devices:' directive for specific devices when possible.
+    # privileged: true
+    #
+    # Example for a specific USB device:
+    # devices:
+    #   - /dev/ttyUSB0:/dev/ttyUSB0
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.homeassistant.rule=Host(`hass.lan`)"
+      - "traefik.http.routers.homeassistant.entrypoints=websecure"
+      - "traefik.http.routers.homeassistant.tls=true"
+      - "traefik.http.services.homeassistant.loadbalancer.server.port=8123"
+
+  # ---------------------------------------------------------------------------
+  # Portainer CE — Docker Container Management UI
+  # ---------------------------------------------------------------------------
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: portainer
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    # --http-enabled   → enables port 9000 (HTTP) so Traefik can proxy without
+    #                    needing to verify Portainer's internal self-signed cert.
+    # --no-analytics   → disables telemetry.
+    command: --no-analytics --http-enabled
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /home/tom/portainer:/data
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.portainer.rule=Host(`portainer.lan`)"
+      - "traefik.http.routers.portainer.entrypoints=websecure"
+      - "traefik.http.routers.portainer.tls=true"
+      - "traefik.http.services.portainer.loadbalancer.server.port=9000"

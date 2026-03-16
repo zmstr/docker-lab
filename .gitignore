@@ -1,0 +1,11 @@
+# Secrets — never commit live environment config
+.env
+
+# Traefik runtime files (logs, acme.json if ever used)
+traefik/logs/
+traefik/certs/
+
+# Editor artefacts
+.DS_Store
+*.swp
+*~
