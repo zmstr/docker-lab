@@ -1,0 +1,53 @@
+# =============================================================================
+# Traefik Static Configuration
+# Mounted read-only at /etc/traefik/traefik.yml inside the container.
+# Changes require a container restart.
+# =============================================================================
+
+global:
+  checkNewVersion: true
+  sendAnonymousUsage: false
+
+# API and Dashboard — access controlled via basicAuth in dynamic.yml
+api:
+  dashboard: true
+  insecure: false  # Never expose the API without authentication
+
+# Entry points
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true   # 301 redirect — all HTTP is upgraded to HTTPS
+
+  websecure:
+    address: ":443"
+    http:
+      tls: {}             # Enable TLS on this entry point (cert from file provider)
+
+# Providers
+providers:
+  # Docker provider — reads labels from running containers
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false   # Containers must opt-in with traefik.enable=true
+    network: proxy            # Only consider containers on this network
+    watch: true
+
+  # File provider — used for TLS certificates and static middleware definitions
+  file:
+    directory: /etc/traefik/config
+    watch: true               # Hot-reload on file changes
+
+# Logging
+log:
+  level: INFO                 # Options: DEBUG, INFO, WARN, ERROR
+  filePath: "/logs/traefik.log"
+
+accessLog:
+  filePath: "/logs/access.log"
+  bufferingSize: 100          # Buffer log entries in memory before writing
