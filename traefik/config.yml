@@ -1,0 +1,69 @@
+# =============================================================================
+# Traefik Dynamic Configuration
+# Hot-reloaded by Traefik — no container restart required after edits.
+# Mounted read-only at /etc/traefik/config/ inside the container.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# TLS — Certificates
+# ---------------------------------------------------------------------------
+# Place your mkcert-generated certificate files at:
+#   /home/tom/traefik/certs/local-cert.pem
+#   /home/tom/traefik/certs/local-key.pem
+#
+# See README.md for mkcert installation and certificate generation steps.
+# ---------------------------------------------------------------------------
+tls:
+  certificates:
+    - certFile: /etc/traefik/certs/local-cert.pem
+      keyFile:  /etc/traefik/certs/local-key.pem
+
+  # Use this certificate as the default for all TLS routers
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /etc/traefik/certs/local-cert.pem
+        keyFile:  /etc/traefik/certs/local-key.pem
+
+  # Enforce modern TLS settings
+  options:
+    default:
+      minVersion: VersionTLS12
+      sniStrict: true
+      cipherSuites:
+        - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305
+        - TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305
+
+# ---------------------------------------------------------------------------
+# HTTP — Shared Middlewares
+# ---------------------------------------------------------------------------
+http:
+  middlewares:
+
+    # Traefik dashboard — basic authentication
+    # Generate a hash:  htpasswd -nb admin YOUR_PASSWORD
+    # Then paste the full "user:hash" string below (no shell escaping needed here).
+    dashboard-auth:
+      basicAuth:
+        removeHeader: true   # Strip the Authorization header from upstream requests
+        users:
+          - "admin:REPLACE_WITH_HTPASSWD_HASH"
+          # Example (password = "changeme"):
+          # - "admin:$apr1$xyz...$hashvalue"
+
+    # Optional — apply secure HTTP response headers to any router.
+    # Reference with:  middlewares: secure-headers@file
+    secure-headers:
+      headers:
+        browserXssFilter: true
+        contentTypeNosniff: true
+        forceSTSHeader: true
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        referrerPolicy: "strict-origin-when-cross-origin"
+        customFrameOptionsValue: "SAMEORIGIN"
